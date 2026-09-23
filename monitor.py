@@ -62,8 +62,6 @@ SEARCH_KEYWORDS = [
 # ==================== 配置：抓取范围 ====================
 
 # 每次检查最近 N 期"每日汇总"，避免遗漏偶发的发布延迟/网络问题
-# 临时调大：尽量抓取列表页现有的全部历史条目（该列表页本身只展示近期存量，
-# 实测约一个月左右，不保证能覆盖到3个月——具体以实际抓到的条目数为准）
 RECENT_DIGEST_COUNT = 90
 
 # ==================== 邮件配置 ====================
@@ -282,7 +280,9 @@ def send_email(subject, content):
         print(f"  主题: {subject}")
         print(f"  内容:\n{content}")
         return
-    if not all([SENDER, PASSWORD, RECEIVER]):
+    # 支持多个收件邮箱，用英文逗号分隔，如 "a@qq.com,b@163.com"
+    receivers = [r.strip() for r in RECEIVER.split(",") if r.strip()]
+    if not all([SENDER, PASSWORD]) or not receivers:
         print("邮件配置不完整，仅打印：")
         print(f"  主题: {subject}")
         print(f"  内容:\n{content}")
@@ -290,14 +290,14 @@ def send_email(subject, content):
 
     msg = MIMEText(content, "plain", "utf-8")
     msg["From"] = Header(SENDER)
-    msg["To"] = Header(RECEIVER)
+    msg["To"] = Header(", ".join(receivers))
     msg["Subject"] = Header(subject, "utf-8")
     try:
         server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=30)
         server.login(SENDER, PASSWORD)
-        server.sendmail(SENDER, [RECEIVER], msg.as_string())
+        server.sendmail(SENDER, receivers, msg.as_string())
         server.quit()
-        print("✅ 邮件发送成功")
+        print(f"✅ 邮件发送成功（收件人: {', '.join(receivers)}）")
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
 
