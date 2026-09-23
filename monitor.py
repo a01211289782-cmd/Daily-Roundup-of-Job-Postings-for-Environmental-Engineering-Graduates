@@ -10,8 +10,8 @@
      搜索引擎可能返回验证码或空结果，属正常现象，不代表脚本出错）
 
 设计说明：
-  - 高校人才网的主搜索页是 Vue.js 前端动态渲染，无法直接抓取；但其"每日汇总"栏目
-    （/daily/detail/xxxx.html）是纯静态 HTML，可稳定抓取。
+  - 高校人才网的主搜索页是 Vue.js 前端动态渲染，无法直接抓取；但其"每日汇总"
+    栏目（/daily/detail/xxxx.html）是纯静态 HTML，可稳定抓取。
   - 猎聘（liepin.com）robots.txt 明确禁止自动化访问，故未采用；
     智联招聘/前程无忧等大平台反爬机制极强，同样未纳入。
   - 关键词匹配基于标题文本，可能漏掉标题未明确写出学科名称的广义人才引进公告
@@ -84,6 +84,27 @@ session.headers.update({
 })
 
 
+# ==================== URL标准化 ====================
+
+def normalize_gaoxiaojob_url(href):
+    """标准化高校人才网链接，兼容相对路径、协议相对路径和完整URL"""
+    href = (href or "").strip()
+
+    if not href:
+        return ""
+
+    if href.startswith("http://") or href.startswith("https://"):
+        return href
+
+    if href.startswith("//"):
+        return "https:" + href
+
+    if href.startswith("/"):
+        return "https://www.gaoxiaojob.com" + href
+
+    return "https://www.gaoxiaojob.com/" + href
+
+
 # ==================== 历史记录（去重） ====================
 
 def load_history():
@@ -120,52 +141,83 @@ def match_keywords(title, keywords):
 def fetch_recent_digest_urls():
     """从 daily.html 提取最近 N 期日报详情页链接"""
     urls = []
+
     try:
-        resp = session.get("https://www.gaoxiaojob.com/daily.html", timeout=20, verify=False)
+        resp = session.get(
+            "https://www.gaoxiaojob.com/daily.html",
+            timeout=20,
+            verify=False
+        )
+
         if resp.status_code != 200:
             print(f"  [高校人才网-日报列表] HTTP {resp.status_code}")
             return urls
+
         resp.encoding = resp.apparent_encoding or "utf-8"
         soup = BeautifulSoup(resp.text, "lxml")
         seen = set()
+
         for a in soup.find_all("a", href=re.compile(r"/daily/detail/\d+\.html")):
             href = a["href"]
-            full_url = href if href.startswith("http") else f"https://www.gaoxiaojob.com{href}"
-            if full_url not in seen:
+            full_url = normalize_gaoxiaojob_url(href)
+
+            if full_url and full_url not in seen:
                 seen.add(full_url)
                 urls.append(full_url)
+
             if len(urls) >= RECENT_DIGEST_COUNT:
                 break
+
         print(f"  [高校人才网-日报列表] 找到 {len(urls)} 期最新日报")
+
     except Exception as e:
         print(f"  [高校人才网-日报列表] 失败: {str(e)[:100]}")
+
     return urls
 
 
 def fetch_digest_page(digest_url):
     """抓取单期日报详情页，返回 (标题, 链接) 列表（仅招聘公告链接，排除导航/资讯链接）"""
     items = []
+
     try:
         resp = session.get(digest_url, timeout=20, verify=False)
+
         if resp.status_code != 200:
             print(f"    [{digest_url}] HTTP {resp.status_code}")
             return items
+
         resp.encoding = resp.apparent_encoding or "utf-8"
         soup = BeautifulSoup(resp.text, "lxml")
         seen_urls = set()
-        for a in soup.find_all("a", href=re.compile(r"/announcement/detail/\d+\.html")):
+
+        for a in soup.find_all(
+            "a",
+            href=re.compile(r"/announcement/detail/\d+\.html")
+        ):
             title = a.get_text(strip=True)
             href = a["href"]
+
             if not title or len(title) < 6:
                 continue
-            full_url = href if href.startswith("http") else f"https://www.gaoxiaojob.com{href}"
-            if full_url in seen_urls:
+
+            full_url = normalize_gaoxiaojob_url(href)
+
+            if not full_url or full_url in seen_urls:
                 continue
+
             seen_urls.add(full_url)
-            items.append({"title": title, "url": full_url})
+
+            items.append({
+                "title": title,
+                "url": full_url
+            })
+
         print(f"    [{digest_url}] 提取 {len(items)} 条公告链接")
+
     except Exception as e:
         print(f"    [{digest_url}] 失败: {str(e)[:100]}")
+
     return items
 
 
@@ -175,16 +227,20 @@ def fetch_gaoxiaojob_jobs():
     corporate_results = []
 
     digest_urls = fetch_recent_digest_urls()
+
     for digest_url in digest_urls:
         items = fetch_digest_page(digest_url)
         time.sleep(1)
+
         for item in items:
             title = item["title"]
             url = item["url"]
 
             disc_hits = match_keywords(title, DISCIPLINE_KEYWORDS)
+
             if disc_hits:
                 dedup_key = make_dedup_key("gaoxiaojob", url)
+
                 university_results.append({
                     "category": "高校/科研",
                     "title": title,
@@ -193,11 +249,14 @@ def fetch_gaoxiaojob_jobs():
                     "source": "高校人才网",
                     "dedup_key": dedup_key,
                 })
+
                 continue  # 一条公告只归入一类，避免重复统计
 
             ehs_hits = match_keywords(title, EHS_KEYWORDS)
+
             if ehs_hits:
                 dedup_key = make_dedup_key("gaoxiaojob", url)
+
                 corporate_results.append({
                     "category": "企业/EHS",
                     "title": title,
@@ -214,61 +273,98 @@ def fetch_gaoxiaojob_jobs():
 
 def search_baidu(keyword):
     results = []
+
     try:
         import urllib.parse
+
         url = f"https://www.baidu.com/s?wd={urllib.parse.quote(keyword)}&rn=10"
+
         resp = session.get(url, timeout=15, verify=False)
         resp.encoding = resp.apparent_encoding or "utf-8"
+
         soup = BeautifulSoup(resp.text, "lxml")
+
         for item in soup.select(".result, .c-container"):
             title_tag = item.select_one("h3 a") or item.select_one("a")
+
             if not title_tag:
                 continue
+
             title = title_tag.get_text(strip=True)
             href = title_tag.get("href", "")
+
             if title and href and match_keywords(title, EHS_KEYWORDS):
                 dedup_key = make_dedup_key("baidu", href)
+
                 results.append({
                     "category": "企业/EHS",
                     "title": title,
                     "url": href,
-                    "matched": "、".join(match_keywords(title, EHS_KEYWORDS)),
+                    "matched": "、".join(
+                        match_keywords(title, EHS_KEYWORDS)
+                    ),
                     "source": "百度搜索",
                     "dedup_key": dedup_key,
                 })
+
         print(f"  [百度:{keyword}] 筛选后 {len(results)} 条")
+
     except Exception as e:
-        print(f"  [百度:{keyword}] 失败（常见于反爬限制）: {str(e)[:80]}")
+        print(
+            f"  [百度:{keyword}] 失败（常见于反爬限制）: "
+            f"{str(e)[:80]}"
+        )
+
     return results
 
 
 def search_bing(keyword):
     results = []
+
     try:
         import urllib.parse
-        url = f"https://cn.bing.com/search?q={urllib.parse.quote(keyword)}&count=10"
+
+        url = (
+            f"https://cn.bing.com/search?"
+            f"q={urllib.parse.quote(keyword)}&count=10"
+        )
+
         resp = session.get(url, timeout=15, verify=False)
         resp.encoding = resp.apparent_encoding or "utf-8"
+
         soup = BeautifulSoup(resp.text, "lxml")
+
         for item in soup.select("li.b_algo"):
             title_tag = item.select_one("h2 a")
+
             if not title_tag:
                 continue
+
             title = title_tag.get_text(strip=True)
             href = title_tag.get("href", "")
+
             if title and href and match_keywords(title, EHS_KEYWORDS):
                 dedup_key = make_dedup_key("bing", href)
+
                 results.append({
                     "category": "企业/EHS",
                     "title": title,
                     "url": href,
-                    "matched": "、".join(match_keywords(title, EHS_KEYWORDS)),
+                    "matched": "、".join(
+                        match_keywords(title, EHS_KEYWORDS)
+                    ),
                     "source": "必应搜索",
                     "dedup_key": dedup_key,
                 })
+
         print(f"  [必应:{keyword}] 筛选后 {len(results)} 条")
+
     except Exception as e:
-        print(f"  [必应:{keyword}] 失败（常见于反爬限制）: {str(e)[:80]}")
+        print(
+            f"  [必应:{keyword}] 失败（常见于反爬限制）: "
+            f"{str(e)[:80]}"
+        )
+
     return results
 
 
@@ -280,8 +376,14 @@ def send_email(subject, content):
         print(f"  主题: {subject}")
         print(f"  内容:\n{content}")
         return
+
     # 支持多个收件邮箱，用英文逗号分隔，如 "a@qq.com,b@163.com"
-    receivers = [r.strip() for r in RECEIVER.split(",") if r.strip()]
+    receivers = [
+        r.strip()
+        for r in RECEIVER.split(",")
+        if r.strip()
+    ]
+
     if not all([SENDER, PASSWORD]) or not receivers:
         print("邮件配置不完整，仅打印：")
         print(f"  主题: {subject}")
@@ -292,12 +394,29 @@ def send_email(subject, content):
     msg["From"] = Header(SENDER)
     msg["To"] = Header(", ".join(receivers))
     msg["Subject"] = Header(subject, "utf-8")
+
     try:
-        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=30)
+        server = smtplib.SMTP_SSL(
+            SMTP_SERVER,
+            SMTP_PORT,
+            timeout=30
+        )
+
         server.login(SENDER, PASSWORD)
-        server.sendmail(SENDER, receivers, msg.as_string())
+
+        server.sendmail(
+            SENDER,
+            receivers,
+            msg.as_string()
+        )
+
         server.quit()
-        print(f"✅ 邮件发送成功（收件人: {', '.join(receivers)}）")
+
+        print(
+            f"✅ 邮件发送成功（收件人: "
+            f"{', '.join(receivers)}）"
+        )
+
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
 
@@ -305,62 +424,130 @@ def send_email(subject, content):
 # ==================== 主流程 ====================
 
 def run_tracker():
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始招聘信息追踪...")
+    print(
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+        f"开始招聘信息追踪..."
+    )
+
     history = load_history()
 
     print("正在抓取高校人才网每日汇总...")
-    university_jobs, corporate_jobs_from_digest = fetch_gaoxiaojob_jobs()
 
-    print("正在搜索企业EHS/环境工程岗位（百度/必应，补充数据源）...")
+    university_jobs, corporate_jobs_from_digest = (
+        fetch_gaoxiaojob_jobs()
+    )
+
+    print(
+        "正在搜索企业EHS/环境工程岗位"
+        "（百度/必应，补充数据源）..."
+    )
+
     corporate_jobs_from_search = []
+
     for kw in SEARCH_KEYWORDS:
-        corporate_jobs_from_search.extend(search_baidu(kw))
-        time.sleep(2)
-        corporate_jobs_from_search.extend(search_bing(kw))
+        corporate_jobs_from_search.extend(
+            search_baidu(kw)
+        )
+
         time.sleep(2)
 
-    all_results = university_jobs + corporate_jobs_from_digest + corporate_jobs_from_search
+        corporate_jobs_from_search.extend(
+            search_bing(kw)
+        )
+
+        time.sleep(2)
+
+    all_results = (
+        university_jobs
+        + corporate_jobs_from_digest
+        + corporate_jobs_from_search
+    )
 
     # 去重
-    seen_keys = set(history.get("seen_keys", []))
+    seen_keys = set(
+        history.get("seen_keys", [])
+    )
+
     new_results = []
+
     for r in all_results:
         key = r["dedup_key"]
+
         if key not in seen_keys:
             seen_keys.add(key)
             history["seen_keys"].append(key)
             new_results.append(r)
 
     history["last_check"] = datetime.now().isoformat()
+
     save_history(history)
 
-    new_university = [r for r in new_results if r["category"] == "高校/科研"]
-    new_corporate = [r for r in new_results if r["category"] == "企业/EHS"]
+    new_university = [
+        r for r in new_results
+        if r["category"] == "高校/科研"
+    ]
+
+    new_corporate = [
+        r for r in new_results
+        if r["category"] == "企业/EHS"
+    ]
 
     if new_results:
         total = len(new_results)
         batch_size = 20
-        total_batches = (total + batch_size - 1) // batch_size
+        total_batches = (
+            total + batch_size - 1
+        ) // batch_size
 
-        print(f"🎉 发现 {total} 条新招聘信息！（高校/科研 {len(new_university)} 条，企业/EHS {len(new_corporate)} 条）")
-        print(f"📧 将分成 {total_batches} 封邮件发送，每封最多 {batch_size} 条。")
+        print(
+            f"🎉 发现 {total} 条新招聘信息！"
+            f"（高校/科研 {len(new_university)} 条，"
+            f"企业/EHS {len(new_corporate)} 条）"
+        )
 
-        for batch_no, start in enumerate(range(0, total, batch_size), 1):
-            batch = new_results[start:start + batch_size]
+        print(
+            f"📧 将分成 {total_batches} 封邮件发送，"
+            f"每封最多 {batch_size} 条。"
+        )
 
-            lines = [
-                f"追踪时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
-                f"本邮件包含第 {batch_no}/{total_batches} 批，共 {len(batch)} 条信息。\n"
+        for batch_no, start in enumerate(
+            range(0, total, batch_size),
+            1
+        ):
+            batch = new_results[
+                start:start + batch_size
             ]
 
-            batch_university = [r for r in batch if r["category"] == "高校/科研"]
-            batch_corporate = [r for r in batch if r["category"] == "企业/EHS"]
+            lines = [
+                f"追踪时间: "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+                f"本邮件包含第 "
+                f"{batch_no}/{total_batches} 批，"
+                f"共 {len(batch)} 条信息。\n"
+            ]
+
+            batch_university = [
+                r for r in batch
+                if r["category"] == "高校/科研"
+            ]
+
+            batch_corporate = [
+                r for r in batch
+                if r["category"] == "企业/EHS"
+            ]
 
             if batch_university:
                 lines.append(
-                    f"\n{'='*20} 高校/科研岗位（{len(batch_university)}条） {'='*20}\n"
+                    f"\n{'=' * 20} "
+                    f"高校/科研岗位"
+                    f"（{len(batch_university)}条） "
+                    f"{'=' * 20}\n"
                 )
-                for i, r in enumerate(batch_university, 1):
+
+                for i, r in enumerate(
+                    batch_university,
+                    1
+                ):
                     lines.append(
                         f"{i}. {r['title']}\n"
                         f"   命中关键词: {r['matched']}\n"
@@ -370,9 +557,16 @@ def run_tracker():
 
             if batch_corporate:
                 lines.append(
-                    f"\n{'='*20} 企业/EHS岗位（{len(batch_corporate)}条） {'='*20}\n"
+                    f"\n{'=' * 20} "
+                    f"企业/EHS岗位"
+                    f"（{len(batch_corporate)}条） "
+                    f"{'=' * 20}\n"
                 )
-                for i, r in enumerate(batch_corporate, 1):
+
+                for i, r in enumerate(
+                    batch_corporate,
+                    1
+                ):
                     lines.append(
                         f"{i}. {r['title']}\n"
                         f"   命中关键词: {r['matched']}\n"
@@ -383,7 +577,9 @@ def run_tracker():
             content = "\n".join(lines)
 
             send_email(
-                f"【招聘追踪】第 {batch_no}/{total_batches} 封｜共 {total} 条新信息",
+                f"【招聘追踪】第 "
+                f"{batch_no}/{total_batches} 封｜"
+                f"共 {total} 条新信息",
                 content,
             )
 
