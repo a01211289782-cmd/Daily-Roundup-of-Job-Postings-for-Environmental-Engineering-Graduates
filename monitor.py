@@ -79,7 +79,7 @@ HISTORY_MAX = 2000
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept-Language": "zh-CN,zh;q=0.9",
 })
 
@@ -338,34 +338,58 @@ def run_tracker():
     new_corporate = [r for r in new_results if r["category"] == "企业/EHS"]
 
     if new_results:
-        print(f"🎉 发现 {len(new_results)} 条新招聘信息！（高校/科研 {len(new_university)} 条，企业/EHS {len(new_corporate)} 条）")
-        lines = [f"追踪时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"]
+        total = len(new_results)
+        batch_size = 20
+        total_batches = (total + batch_size - 1) // batch_size
 
-        if new_university:
-            lines.append(f"\n{'='*20} 高校/科研岗位（{len(new_university)}条） {'='*20}\n")
-            for i, r in enumerate(new_university, 1):
+        print(f"🎉 发现 {total} 条新招聘信息！（高校/科研 {len(new_university)} 条，企业/EHS {len(new_corporate)} 条）")
+        print(f"📧 将分成 {total_batches} 封邮件发送，每封最多 {batch_size} 条。")
+
+        for batch_no, start in enumerate(range(0, total, batch_size), 1):
+            batch = new_results[start:start + batch_size]
+
+            lines = [
+                f"追踪时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+                f"本邮件包含第 {batch_no}/{total_batches} 批，共 {len(batch)} 条信息。\n"
+            ]
+
+            batch_university = [r for r in batch if r["category"] == "高校/科研"]
+            batch_corporate = [r for r in batch if r["category"] == "企业/EHS"]
+
+            if batch_university:
                 lines.append(
-                    f"{i}. {r['title']}\n"
-                    f"   命中关键词: {r['matched']}\n"
-                    f"   来源: {r['source']}\n"
-                    f"   链接: {r['url']}\n"
+                    f"\n{'='*20} 高校/科研岗位（{len(batch_university)}条） {'='*20}\n"
                 )
+                for i, r in enumerate(batch_university, 1):
+                    lines.append(
+                        f"{i}. {r['title']}\n"
+                        f"   命中关键词: {r['matched']}\n"
+                        f"   来源: {r['source']}\n"
+                        f"   链接: {r['url']}\n"
+                    )
 
-        if new_corporate:
-            lines.append(f"\n{'='*20} 企业/EHS岗位（{len(new_corporate)}条） {'='*20}\n")
-            for i, r in enumerate(new_corporate, 1):
+            if batch_corporate:
                 lines.append(
-                    f"{i}. {r['title']}\n"
-                    f"   命中关键词: {r['matched']}\n"
-                    f"   来源: {r['source']}\n"
-                    f"   链接: {r['url']}\n"
+                    f"\n{'='*20} 企业/EHS岗位（{len(batch_corporate)}条） {'='*20}\n"
                 )
+                for i, r in enumerate(batch_corporate, 1):
+                    lines.append(
+                        f"{i}. {r['title']}\n"
+                        f"   命中关键词: {r['matched']}\n"
+                        f"   来源: {r['source']}\n"
+                        f"   链接: {r['url']}\n"
+                    )
 
-        content = "\n".join(lines)
-        send_email(
-            f"【招聘追踪】发现 {len(new_results)} 条新信息（高校{len(new_university)}+企业{len(new_corporate)}）",
-            content,
-        )
+            content = "\n".join(lines)
+
+            send_email(
+                f"【招聘追踪】第 {batch_no}/{total_batches} 封｜共 {total} 条新信息",
+                content,
+            )
+
+            if batch_no < total_batches:
+                time.sleep(2)
+
     else:
         print("未发现新的相关招聘信息。")
 
