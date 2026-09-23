@@ -1,0 +1,42 @@
+name: 每天监控开放基金申报指南
+
+on:
+  schedule:
+    # 每天北京时间 9:00 运行（UTC 时间是 1:00）
+    # 想改时间就调整下面的 cron
+    - cron: '0 1 * * *'   # UTC 01:00 = 北京时间 09:00
+  workflow_dispatch:      # 允许手动点击运行
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install requests beautifulsoup4 lxml
+
+      - name: 运行监控脚本
+        env:
+          EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+        run: python monitor.py
+
+      - name: 提交历史记录（可选，让下次不重复通知）
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add monitor_history.json || true
+          git commit -m "更新监控历史 $(date +'%Y-%m-%d %H:%M')" || echo "没有变化"
+          git push || true
